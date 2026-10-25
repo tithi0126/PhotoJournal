@@ -1,0 +1,622 @@
+Photojournal: PRD & Technical Implementation Guide
+Working title: "Frame" · Version 1.0 · Prepared by Product & Architecture
+1. Executive Summary
+Frame is a minimalist photojournal built on one rule: one photo per day. No feeds, no filters, no likes, no infinite scroll. Each day gets a single photograph, a short title and a few lines of text. Everything technical about the shot (camera, lens, ISO, aperture, shutter speed, GPS) is read automatically from the photo's EXIF data, so the user never types metadata.
+Over time the journal becomes a quiet, beautiful archive:
+• A calendar to move through days.
+• An automatically generated monthly contact sheet and yearly collage, where every tile deep-links back to its day.
+• A postcard maker that turns 12–15 favorite photos into print-ready PDFs with correct bleed, margins and resolution.
+Pitch: "A year in 365 frames. One photo a day, a lifetime of memory, and twelve postcards you can actually hold."
+Why it wins: Scarcity creates meaning. Photo apps optimize for volume; Frame optimizes for attention. The constraint is the product, and the print output is the emotional and commercial payoff.
+Success metrics (first 12 months):
+Metric
+Target
+Day-30 retention
+≥ 25%
+Median entries per active user per month
+≥ 18
+Users reaching a completed month (contact sheet viewed)
+≥ 40% of D30 retained
+Free → paid conversion
+4–6%
+Postcard order attach rate among paying users
+≥ 10% annually
+2. Target Audience & User Personas
+Primary audience: People aged 22–45 who like photography or journaling, feel overwhelmed by their camera roll, and want a lightweight daily ritual. They are mobile-first, privacy-conscious and attracted to analog aesthetics (film cameras, zines, Polaroids).
+Persona 1 – Maya, the Hobbyist Photographer (29)
+• Shoots on a mirrorless camera and her phone; posts on Instagram but finds it performative.
+• Needs: A private place to curate one image a day; cares about seeing aperture/ISO/lens next to the shot to learn from her own work.
+• Key features: EXIF display, import from camera roll or transferred files, high-res postcard export.
+Persona 2 – Daniel, the Reflective Journaler (35)
+• Has tried and abandoned text journals because they felt like homework.
+• Needs: A low-friction habit: one photo, one line. Wants gentle reminders, not guilt.
+• Key features: Daily reminder, calendar with streak-free design, monthly contact sheet as a reward.
+Persona 3 – Priya, the New Parent / Traveler (32)
+• Takes hundreds of photos, never organizes them.
+• Needs: A way to distill a baby's first year or a long trip into a shareable keepsake.
+• Key features: Yearly collage, postcards for grandparents, location data.
+Persona 4 – Tom, the Gift Giver (41)
+• Not a daily user; arrives to make a physical gift.
+• Needs: A fast path from "pick photos" to "printed postcards at the door."
+• Key features: Postcard builder, print-partner checkout.
+3. Detailed Feature Breakdown
+3.1 Core Philosophy: One Photo Per Day
+Rule: Each calendar date holds at most one entry, and each entry holds exactly one photo.
+Functional requirements
+• FR-1.1: The database enforces uniqueness on entry_date (one row per date).
+• FR-1.2: "Today" is the default target date. The user may also add photos to past dates (backfill) subject to the rules below.
+• FR-1.3: Future dates are locked; the calendar shows them as inactive.
+Edge cases
+Scenario
+Behavior
+User tries to add a second photo to a day that already has one
+Show a friendly sheet: "Today already has a photo. Replace it, or keep it?" Replace keeps the old image in a 30-day trash (recoverable) and preserves title/description unless the user chooses to clear them. No second photo is ever stored for that date.
+User missed a day
+The calendar shows an empty, unobtrusive dot. No red marks, no streak shaming. The day remains fillable (see backfill).
+Backfill of past days
+Allowed. Default: the app suggests the photo's EXIF capture date. Photos with no EXIF date prompt the user to confirm the date.
+Selected photo's capture date differs from the target date
+Show a one-line notice: "This photo was taken on 12 Mar. Use it for 14 Mar?" with "Use 12 Mar instead" as the secondary action. The user decides; the true capture date is always stored separately from the journal date.
+Photo lacks EXIF (screenshots, edited/exported images, stripped files)
+The entry saves normally; the metadata panel shows only what exists and hides empty fields rather than showing blanks.
+Time zones & travel
+entry_date is a plain local calendar date (YYYY-MM-DD) chosen by the user and never shifted by time zone. Capture time is stored as a UTC timestamp plus the original offset when available.
+User wants to delete an entry
+Soft delete with undo; hard delete after 30 days. The date becomes empty and fillable again.
+Multiple devices
+One entry per date is enforced after sync; if two devices created different entries for the same date, the later updated_at wins and the other photo is moved to trash with a notification (see conflict handling in §5.4).
+Day-boundary at midnight
+A grace period until 03:00 local time: the app still offers yesterday as an easy-to-select option for late-night shooters.
+3.2 Daily View & Auto-Metadata
+Layout (top to bottom)
+1. Full-bleed or near-full-width photo, preserving aspect ratio (tap to view full-screen, pinch to zoom).
+2. Date label (e.g., Friday, 23 October 2026).
+3. Title: single line, max 60 characters, optional.
+4. Description: max 280 characters, optional.
+5. Collapsible metadata drawer, closed by default, showing:
+    ◦ Camera make/model
+    ◦ Lens model
+    ◦ ISO, aperture (f/), shutter speed, focal length
+    ◦ Capture date/time
+    ◦ GPS coordinates and a reverse-geocoded place name
+    ◦ A small static map thumbnail (opt-in)
+Functional requirements
+• FR-2.1: All metadata fields are extracted automatically at import and are read-only. The user cannot type EXIF values.
+• FR-2.2: Users can toggle "Hide location" per entry. This hides it in the UI and from any exports/shares, while still storing it locally.
+• FR-2.3: Swipe left/right navigates to the previous/next day that has an entry; a header button jumps to the calendar.
+• FR-2.4: Empty days show an elegant empty state with a single "Add photo" action.
+Privacy: GPS is sensitive. Default is location stored, displayed locally, and stripped from any shared image or print file. Postcards never print coordinates unless the user opts in to a caption.
+3.3 Calendar Navigation
+• FR-3.1: Month grid where each day with an entry shows a square thumbnail; empty days show a faint numeral.
+• FR-3.2: Header with month/year and a quick jump picker; swipe horizontally between months.
+• FR-3.3: Tap a thumbnail → opens that day's Daily View with a shared-element (hero) transition.
+• FR-3.4: Today is subtly outlined; future days are dimmed and non-interactive.
+• FR-3.5: Long-press an empty past day → "Add photo for this day."
+• FR-3.6: A Year overview (12 mini-month grids) is available via pinch-out or a segmented control.
+• FR-3.7: Performance target: month swipe renders at 60 fps using pre-generated 200 px thumbnails.
+3.4 Monthly & Yearly Contact Sheets
+Monthly Contact Sheet
+• FR-4.1: On the first launch after a month ends (and via a scheduled background job plus local notification, "Your October contact sheet is ready"), the app generates a collage of all photos in that month.
+• FR-4.2: Months in progress show a live preview labeled "In progress"; the final sheet is generated automatically at month end and can be regenerated on demand if the user edits entries.
+• FR-4.3: Visual style: contact-sheet aesthetic with thin gutters, small date numerals under each frame, a month/year header and an optional film-strip border. Frames keep their original aspect ratios (no destructive cropping).
+• FR-4.4: Deep-linking: tapping any tile opens that entry's Daily View. Implementation: every tile is a hit region mapped to an entry_id; navigation uses the route /day/{yyyy-MM-dd}.
+• FR-4.5: Back navigation from a Daily View returns to the same scroll/zoom position of the sheet.
+• FR-4.6: Export/share the sheet as a high-res JPEG/PNG (location-free).
+• FR-4.7: Missing days appear as blank frames (default) or are collapsed (user setting "Compact layout").
+Yearly Collage
+• FR-4.8: A year view showing all entries of the year, either as a 12-row monthly strip layout (one row per month) or a dense mosaic (user toggle).
+• FR-4.9: Same deep-link behavior; pinch-to-zoom for dense mosaics with progressive image loading.
+• FR-4.10: Auto-generated each January 1 for the prior year, and available live for the current year.
+Edge cases: Months with 0 photos produce no sheet (the card is hidden). Months with 1–4 photos use a "gallery" layout rather than a sparse grid. Edited or replaced photos invalidate the cached sheet automatically (via a content hash).
+3.5 Print-Ready Postcards
+Flow
+1. User opens Postcards → selects 12–15 photos from anywhere in the journal (multi-select grid with a counter, "12 of 12–15").
+2. Chooses a format (see below) and style: Full-bleed photo, White border, Photo + caption (date/title), or Photo front + message area on the back.
+3. Reviews each postcard in a swipeable preview with trim, bleed and safe-zone guides togglable.
+4. Exports a print-ready PDF (single multi-page file, front and back pages in the order printers expect) or sends the order directly to a print partner (V1.5).
+Specifications
+Format
+Trim size
+Bleed
+Document size with bleed
+Pixels @ 300 DPI
+US 4×6 in
+101.6 × 152.4 mm
+0.125 in (3.175 mm) per side
+4.25 × 6.25 in
+1275 × 1875
+A6 (EU/IN)
+105 × 148 mm
+3 mm per side
+111 × 154 mm
+1311 × 1819
+US 5×7 in (V2)
+127 × 177.8 mm
+0.125 in
+5.25 × 7.25 in
+1575 × 2175
+• Safe zone: keep all text and critical subjects at least 5 mm (0.2 in) inside the trim edge.
+• Back side: message area, address block and postage area (right-hand side, per postal standards for the destination country), plus optional printed caption/location (opt-in).
+Edge cases and validation
+• Photos below the effective resolution threshold (< 200 DPI at print size) trigger a warning with a red/amber/green quality badge per card; < 150 DPI blocks export unless the user confirms.
+• Aspect-ratio mismatches (e.g., a 1:1 or panorama photo on a 2:3 card) offer Fill & crop (with draggable focal point) or Fit with border.
+• Fewer than 12 photos available → the builder is disabled with a progress prompt ("You need 8 more photos"); the 12–15 rule is enforced at export.
+• Photos are never altered in the journal; all cropping is non-destructive and stored as crop rectangles.
+4. UI/UX Guidelines
+4.1 Design Principles
+1. Photo first. Chrome recedes; the image is the interface.
+2. Calm, not gamified. No streak counters, confetti or red alerts.
+3. Quiet motion. Short fades and hero transitions (200–300 ms); no bouncy animations.
+4. Print mindset. Whitespace, thin rules and a contact-sheet vocabulary borrowed from darkroom culture.
+4.2 Color System
+Token
+Light
+Dark
+bg
+#FAFAF7 (warm paper)
+#0E0E0F
+surface
+#FFFFFF
+#1A1A1C
+text-primary
+#151515
+#F2F2EE
+text-secondary
+#6B6B66
+#9A9A94
+hairline
+#E4E4DE
+#2A2A2D
+accent
+#C8452D (single warm red, used sparingly)
+#E36A50
+The app follows the system theme by default with a manual override. In dark mode, photos sit against near-black to maximize perceived contrast.
+4.3 Typography
+• Titles / headings: a refined serif such as Fraunces or Newsreader (editorial feel).
+• Body & UI: a neutral grotesque such as Inter or DM Sans.
+• Metadata: a monospaced face (JetBrains Mono or IBM Plex Mono) at 11–12 pt for the EXIF drawer, evoking camera data imprints.
+• Support Dynamic Type / system font scaling up to 200%.
+4.4 Layout & Grids
+• Spacing scale: 4 / 8 / 12 / 16 / 24 / 32 / 48 px.
+• Calendar: 7-column grid, square cells with 2 px gutters.
+• Monthly contact sheet: justified-row layout (rows of equal height; widths determined by each photo's aspect ratio), 6 px gutters, date numerals in monospace beneath each frame, optional sprocket-hole film border.
+• Yearly collage: 12 month rows (strip mode) or a treemap/mosaic with uniform 3 px gutters (dense mode).
+• Daily view: photo max-width = screen width; portrait photos capped at 75% of screen height so text stays visible.
+4.5 Navigation
+Three bottom tabs: Today (daily view / quick add), Calendar (month/year), Sheets (contact sheets, yearly collage and postcards). Settings live in a top-right menu. The primary action is a single "Add photo" button that appears only when the target day is empty.
+4.6 Accessibility
+• Minimum 4.5:1 text contrast; 44 × 44 pt touch targets.
+• Alt text defaults to the entry title; users may add a dedicated description for VoiceOver/TalkBack.
+• A reduced-motion setting disables hero transitions.
+5. Technical Architecture & Tech Stack
+5.1 Framework Recommendation: Flutter
+Criterion
+Flutter
+React Native
+Custom 2D rendering (collages, pinch-zoom mosaics)
+Excellent (Impeller/Skia, CustomPainter)
+Good, but needs Skia library or native modules
+Pixel-consistent UI across iOS/Android
+Same renderer everywhere
+Uses native components; subtle differences
+PDF generation
+Mature pure-Dart pdf package
+Relies on native or JS libs with fewer layout controls
+Image-heavy list performance
+Strong with proper caching
+Strong with FlashList + fast-image
+Hiring pool
+Smaller
+Larger JS/TS pool
+Decision: Flutter. The product is a rendering-heavy, design-led app; Flutter's custom painting and PDF tooling are the decisive advantages. If your team is JS-native, React Native with @shopify/react-native-skia is viable but needs more native glue.
+5.2 Architecture Overview
+Local-first, offline-capable. The device is the source of truth; the cloud is optional sync and backup.
+• Presentation: screens and widgets, go_router for deep links.
+• State: Riverpod (AsyncNotifiers; repositories exposed as providers).
+• Domain: use-cases such as AddEntry, ReplacePhoto, BuildContactSheet, ExportPostcardPdf.
+• Data: Drift (SQLite), a private file store, and platform channels for EXIF.
+• Workers: Dart isolates for CPU-heavy work, plus workmanager / BGTaskScheduler for month-end jobs.
+• Optional cloud (Plus tier): Supabase (Auth, Postgres, Storage, Edge Functions) for sync/backup and server-side PDF conversion; a print partner API (Prodigi / Gelato / Lob) for fulfillment.
+5.3 Recommended Stack
+Layer
+Choice
+Notes
+Language / framework
+Dart 3 + Flutter 3.x
+
+State management
+flutter_riverpod + riverpod_generator
+Testable, scoped providers
+Routing & deep links
+go_router
+Typed routes: /day/:date, /month/:ym, /year/:y
+Local DB
+Drift (type-safe SQLite)
+Preferred over Realm and Isar for long-term maintenance risk; SQLite is the most durable, inspectable option
+Photo access
+photo_manager (gallery + AssetEntity) with image_picker as fallback
+photo_manager preserves originals and location access
+EXIF
+native_exif (iOS ImageIO / Android ExifInterface) with exif (pure Dart) as fallback
+See §6.1
+Image processing
+image (Dart) in isolates, plus flutter_image_compress (native, fast)
+
+Calendar
+Custom grid (recommended for thumbnails) or table_calendar
+
+Geocoding
+geocoding (on-device)
+Cache place names in the DB
+PDF
+pdf + printing
+Page format, embedding, rasterization
+Notifications / background
+flutter_local_notifications, workmanager
+Month-end job
+Sharing
+share_plus
+
+IAP / subscriptions
+purchases_flutter (RevenueCat)
+
+Analytics / crash
+PostHog (privacy-friendly) + Sentry
+
+Backend (optional)
+Supabase
+Row-level security per user
+Print fulfillment
+Prodigi or Gelato (global) or Lob (US postcards)
+
+Note: verify current maintenance status and licensing of each package before committing.
+5.4 Storage Strategy
+• Originals: copied into the app's private documents directory (/photos/orig/{id}.jpg|heic) so the journal survives gallery deletions.
+• Derivatives (generated at import): thumb_200, medium_800, large_2048 as JPEG/WebP under /photos/derived/.
+• Cloud sync (Plus): upload originals plus sidecar JSON to Supabase Storage using resumable uploads; sync metadata rows over Postgres. Conflict rule: last-write-wins by updated_at, but photo-replacement conflicts move the loser to trash rather than overwriting it.
+• Backups: include the DB and /photos/orig in iCloud/Google Auto Backup, and provide a manual "Export journal (ZIP)" option.
+6. Core Technical Implementations
+6.1 Efficient EXIF Extraction on Mobile
+Principles
+1. Extract once, at import, and persist. Never parse EXIF during scrolling or rendering.
+2. Read from the original file, not from a resized or recompressed copy; resizing usually strips EXIF.
+3. Run off the UI thread (an isolate or native code).
+Platform pitfalls (important)
+• iOS: image_picker can return a re-encoded image with EXIF/GPS removed. Use photo_manager (PhotoKit PHAsset) and request the original data to retain metadata. Location is also available from PHAsset.location.
+• Android 10+: location data is redacted unless the app declares and requests ACCESS_MEDIA_LOCATION; use MediaStore.setRequireOriginal(uri) to read the unredacted file. The system Photo Picker may also redact location, so request the permission explicitly and test on real devices.
+• HEIC/HEIF: pure-Dart parsers have inconsistent support; prefer native readers (ImageIO / ExifInterface) and fall back to the Dart package for JPEG.
+• Time zones: DateTimeOriginal has no zone; use OffsetTimeOriginal (EXIF 2.31) if present, otherwise assume the device's zone and set tz_assumed = true.
+Fields to extract
+Display field
+EXIF tag(s)
+Camera
+Make, Model
+Lens
+LensModel (fallback LensMake + LensSpecification)
+ISO
+ISOSpeedRatings / PhotographicSensitivity
+Aperture
+FNumber (fallback ApertureValue)
+Shutter speed
+ExposureTime (format as 1/250 s)
+Focal length
+FocalLength (+ FocalLengthIn35mmFilm)
+Capture date
+DateTimeOriginal, OffsetTimeOriginal, SubSecTimeOriginal
+GPS
+GPSLatitude/Ref, GPSLongitude/Ref, GPSAltitude
+Dimensions & orientation
+PixelXDimension, PixelYDimension, Orientation
+Reference pipeline (Dart sketch)
+Future<PhotoMeta> importPhoto(AssetEntity asset) async {
+  final file = await asset.originFile;                // original bytes, EXIF intact
+  final stored = await copyToAppDir(file!);           // private copy
+  final meta = await Isolate.run(() => parseExif(stored.path)); // off UI thread
+  final derivs = await generateDerivatives(stored);   // thumb/medium/large
+  final place  = meta.hasGps
+      ? await reverseGeocode(meta.lat!, meta.lng!)     // cache result
+      : null;
+  return PhotoMeta(meta, derivs, place);
+}
+Normalization: convert GPS DMS rationals to decimal degrees; swap width/height according to orientation; store shutter speed as a rational (numerator/denominator) and aperture as a decimal so formatting can change without reparsing; keep the raw EXIF in a JSON blob column for future features.
+Efficiency tips: for JPEG, read only the first 64–128 KB of the file (the APP1 segment) when using a Dart parser; batch imports (e.g., backfilling many days) with a concurrency of 2–3 isolates; rate-limit reverse geocoding and cache results by rounded coordinates (~3 decimals).
+6.2 Generating Monthly/Yearly Collages Without Lag
+Strategy: pre-compute the layout, pre-generate the pixels, cache the result.
+1. Layout is pure math. Compute tile rectangles from photo aspect ratios in an isolate and store them as lightweight JSON ([{entryId, x, y, w, h}], normalized 0–1). Use a justified-rows algorithm: for each row, add photos until the row's total aspect ratio × target height reaches the container width, then scale the row to fit. For yearly mosaics use a squarified treemap or fixed-grid packing.
+2. Interactive view ≠ exported image.
+    ◦ On-screen: render with a CustomPainter (or a Stack of positioned Image widgets for ≤ 31 tiles) using the 200–800 px derivatives. For the year (≈ 365 tiles) use a single CustomPainter with drawImageRect and a tile cache, or InteractiveViewer with level-of-detail loading: show thumb_200 at zoom ≤ 1.5×, then switch visible tiles to medium_800 when zoomed in.
+    ◦ Exported image: render once at high resolution (e.g., 3000 px wide) using dart:ui PictureRecorder + Canvas.drawImageRect, encode to JPEG/PNG, and save to /collages/{type}_{period}_{hash}.jpg.
+3. Hit-testing for deep links. Keep the normalized rects from step 1; on tap, convert the tap position to normalized coordinates, find the containing rect, and call context.go('/day/$date'). This works identically for the on-screen and exported layouts.
+4. Caching & invalidation. Compute content_hash = SHA-1(sorted [entryId + photo_updated_at + layout_version + style]). If the cache row has the same hash, reuse the file; otherwise regenerate in the background. Regeneration is triggered by entry add/replace/delete and at month end.
+5. Memory discipline. Decode images at target size using ResizeImage / cacheWidth; never decode originals for collages; dispose ui.Image objects after drawing; limit concurrent decodes to ~4.
+6. Month-end automation. Use workmanager (Android) and BGTaskScheduler (iOS) for a daily "collage check" task; on the first foreground launch of a new month also check and generate lazily (OS schedulers are best-effort). Send a local notification when the sheet is ready.
+7. Performance budgets: monthly sheet generation < 1.5 s on a mid-range device; yearly mosaic first paint < 500 ms from a cached layout; 60 fps scrolling with no frame > 16 ms in a profile build.
+6.3 Generating Print-Ready PDF Postcards
+Goal: a PDF a commercial printer can accept without manual fixes.
+A. Page geometry (PDF points; 72 pt = 1 in = 25.4 mm)
+• Convert mm → points: pt = mm × 72 / 25.4.
+• US 4×6 with bleed: 4.25 × 6.25 in = 306 × 450 pt.
+• A6 with bleed: 111 × 154 mm ≈ 314.65 × 436.54 pt.
+• Set the PDF MediaBox to the bleed size, and define TrimBox (inset by the bleed) and BleedBox (= media box). The Dart pdf package sets the page format to the bleed size; if a print partner requires an explicit TrimBox, post-process with a small server function (e.g., pdf-lib in an Edge Function) to inject the boxes.
+• Margins/safe zone: place all text inside trim + 5 mm. Photos run to the bleed edge in full-bleed layouts.
+B. Resolution (DPI)
+• Target 300 DPI at final size: the bleed-size pixel dimensions listed in §3.5 (e.g., 1275 × 1875 px for US 4×6).
+• Compute effective DPI per photo: effectiveDpi = croppedPixelWidth / placedWidthInInches. Show a badge: ≥ 250 green, 200–249 amber, < 200 red.
+• Do not upscale low-res images to fake DPI; warn instead. Optional server-side AI upscaling can be a premium add-on later.
+• Embed images as JPEG at quality 90–95. Pre-crop to the target rectangle in an isolate so the PDF stays manageable (target < 3 MB per page).
+C. Color: RGB vs. CMYK Phones capture sRGB (or Display P3); printers print CMYK. Recommended approach:
+1. MVP: export sRGB PDFs with an embedded sRGB ICC profile (or PDF/X-4, which allows RGB with an output intent). Many modern print partners accept RGB and convert in their RIP using tuned profiles, which usually beats a naive client-side conversion. Confirm this with each partner.
+2. V1.5 (professional/DIY printing): a server-side conversion step using Ghostscript (-sColorConversionStrategy=CMYK -dProcessColorModel=/DeviceCMYK) or LittleCMS with a target profile such as FOGRA39 (EU) or U.S. Web Coated SWOP v2 / GRACoL (US). Ship it as an Edge Function or a small container (e.g., Cloud Run).
+3. Convert Display P3 → sRGB before embedding to avoid color shifts.
+4. Warn users that saturated blues and greens print less vividly than on-screen. For small text on CMYK backs, use single-channel black (100K) to avoid registration problems.
+D. Bleed & crop marks
+• Full-bleed layout: the photo fills the whole bleed-size page (cover-fit using the user's focal point).
+• Bordered layout: draw the border color to the bleed edge (never leave white strips that rely on exact trim), then inset the photo.
+• Crop marks (offset 3 mm outside the bleed) are only added under an Export for professional printer toggle, since most online printers do not want them.
+E. Document structure
+• One PDF containing all postcards: for each card, a front page then a back page (duplex order). Optionally offer an imposed sheet (e.g., 4 cards per A4/Letter with crop marks) for print shops.
+• Embed font subsets (use SIL OFL fonts).
+• Re-encoding strips photo EXIF, so no GPS is carried into the PDF.
+F. Implementation sketch (Dart)
+final doc = pw.Document();
+final format = PdfPageFormat(
+  (105 + 6) * PdfPageFormat.mm,                      // A6 + 3 mm bleed each side
+  (148 + 6) * PdfPageFormat.mm,
+  marginAll: 0,
+);
+
+for (final card in cards) {
+  final bytes = await Isolate.run(() => cropToRect(card.path, card.cropRect, 1311, 1819));
+  final img = pw.MemoryImage(bytes);
+
+  doc.addPage(pw.Page(
+    pageFormat: format,
+    build: (_) => pw.FullPage(
+      ignoreMargins: true,
+      child: pw.Image(img, fit: pw.BoxFit.cover),
+    ),
+  ));
+  doc.addPage(buildBackPage(card, format));           // message area + address block
+}
+await File(outPath).writeAsBytes(await doc.save());
+G. Automated preflight checklist
+• All images ≥ 200 effective DPI (warn) / ≥ 150 (block).
+• Page size equals trim + 2 × bleed within ±0.1 mm.
+• Text inside the safe zone.
+• Fonts embedded; transparency flattened if the printer requires PDF/X-1a.
+• File size within the partner's limit.
+7. Database Schema
+Local SQLite (via Drift); types shown in SQL for clarity. The cloud Postgres schema mirrors it with a user_id column and Row Level Security.
+-- One row per journal day
+CREATE TABLE entries (
+  id            TEXT PRIMARY KEY,            -- UUID v7
+  entry_date    TEXT NOT NULL UNIQUE,        -- 'YYYY-MM-DD' (one per day)
+  title         TEXT CHECK (length(title) <= 60),
+  description   TEXT CHECK (length(description) <= 280),
+  photo_id      TEXT NOT NULL REFERENCES photos(id),
+  hide_location INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL,            -- epoch ms UTC
+  updated_at    INTEGER NOT NULL,
+  deleted_at    INTEGER,                     -- soft delete
+  sync_state    TEXT NOT NULL DEFAULT 'local' -- local | pending | synced | conflict
+);
+
+-- File-level info (separate to support replace/trash history)
+CREATE TABLE photos (
+  id              TEXT PRIMARY KEY,
+  original_path   TEXT NOT NULL,
+  thumb_path      TEXT NOT NULL,             -- 200 px
+  medium_path     TEXT NOT NULL,             -- 800 px
+  large_path      TEXT NOT NULL,             -- 2048 px
+  width           INTEGER NOT NULL,
+  height          INTEGER NOT NULL,
+  file_size       INTEGER,
+  mime_type       TEXT,
+  content_hash    TEXT NOT NULL,             -- SHA-1, detects duplicates
+  source_asset_id TEXT,                      -- gallery asset id (optional)
+  created_at      INTEGER NOT NULL,
+  trashed_at      INTEGER                    -- replaced photos await purge
+);
+
+-- Auto-extracted EXIF (1:1 with photos)
+CREATE TABLE photo_metadata (
+  photo_id        TEXT PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+  camera_make     TEXT,
+  camera_model    TEXT,
+  lens_model      TEXT,
+  iso             INTEGER,
+  aperture        REAL,                      -- f-number
+  shutter_num     INTEGER,                   -- exposure time numerator
+  shutter_den     INTEGER,                   -- exposure time denominator
+  focal_length_mm REAL,
+  focal_35mm      REAL,
+  captured_at     INTEGER,                   -- epoch ms UTC
+  captured_offset INTEGER,                   -- minutes from UTC
+  tz_assumed      INTEGER DEFAULT 0,
+  latitude        REAL,
+  longitude       REAL,
+  altitude_m      REAL,
+  place_name      TEXT,                      -- reverse-geocoded, cached
+  orientation     INTEGER,
+  raw_exif_json   TEXT                       -- full dump for future use
+);
+CREATE INDEX idx_meta_captured ON photo_metadata(captured_at);
+
+-- Cached generated collages (monthly / yearly)
+CREATE TABLE collages (
+  id           TEXT PRIMARY KEY,
+  type         TEXT NOT NULL CHECK (type IN ('month','year')),
+  period       TEXT NOT NULL,                -- '2026-10' or '2026'
+  style        TEXT NOT NULL DEFAULT 'contact_sheet',
+  layout_json  TEXT NOT NULL,                -- normalized tile rects + entry ids
+  image_path   TEXT,                         -- rendered export
+  content_hash TEXT NOT NULL,                -- invalidation key
+  is_final     INTEGER NOT NULL DEFAULT 0,   -- 1 once month/year is over
+  generated_at INTEGER NOT NULL,
+  UNIQUE(type, period, style)
+);
+
+-- Postcard projects
+CREATE TABLE postcard_sets (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  format     TEXT NOT NULL,                  -- 'US_4x6' | 'A6' | 'US_5x7'
+  style      TEXT NOT NULL,                  -- full_bleed | border | caption
+  status     TEXT NOT NULL DEFAULT 'draft',  -- draft | exported | ordered
+  pdf_path   TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE postcard_items (
+  id           TEXT PRIMARY KEY,
+  set_id       TEXT NOT NULL REFERENCES postcard_sets(id) ON DELETE CASCADE,
+  entry_id     TEXT NOT NULL REFERENCES entries(id),
+  position     INTEGER NOT NULL,             -- order in set
+  crop_x REAL, crop_y REAL, crop_w REAL, crop_h REAL, -- normalized, non-destructive
+  caption_text TEXT,
+  back_message TEXT,
+  UNIQUE(set_id, position)
+);
+
+-- Key/value settings (theme, reminder time, default format, etc.)
+CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
+Integrity notes
+• entries.entry_date UNIQUE is the database-level guarantee of the one-photo-per-day rule; the UI rule is a courtesy on top. If soft-deleted rows should free up the date, use a partial unique index (WHERE deleted_at IS NULL) instead of a column-level UNIQUE.
+• Replacing a photo: insert the new photos row, update entries.photo_id in one transaction, set trashed_at on the old row; a daily job purges after 30 days.
+• Enforce 12–15 items per postcard set in the domain layer (validated at export, not by the DB, so drafts can be incomplete).
+• Add SQLite FTS5 on entries(title, description) in V2 for search.
+• The stable deep-link key is the date string YYYY-MM-DD (human-readable and unique), not the UUID.
+8. Monetization Strategy
+Principle: protect the core habit (free, ad-free, private) and monetize the outputs people value most: keepsakes and peace of mind.
+8.1 Freemium Model
+Feature
+Free
+Frame Plus (≈ $2.99/mo or $24.99/yr)
+Daily entries, calendar, EXIF
+Unlimited
+Unlimited
+Local storage
+Yes
+Yes
+Monthly contact sheets
+Standard style, no watermark
+Premium styles (film border, polaroid, magazine)
+Yearly collage
+View only
+High-res export, multiple layouts
+Postcard builder
+Preview + one watermarked sample export
+Unlimited print-ready PDF exports
+Cloud backup & multi-device sync
+No (manual ZIP export)
+Yes
+Replaced-photo history
+30 days
+Unlimited
+Reminders, themes
+Basic
+Custom themes, app icons
+Use localized pricing (e.g., an India tier of roughly ₹99/mo or ₹799/yr) to improve conversion in emerging markets.
+8.2 Paid Print Integration (highest-margin lever)
+• Postcard pack order: 12–15 printed postcards shipped worldwide via a print API (Prodigi / Gelato / Lob). Suggested retail $24–$39 per pack depending on size and paper; expected gross margin of roughly 30–45% after print and shipping.
+• Premium paper options: matte, silk, thick uncoated stock; envelopes; gift box.
+• Annual Yearbook (V2): a hardcover book built from the yearly collage and daily entries, retail $49–$89.
+• Poster / wall calendar add-ons: the yearly collage as an A3 poster, or a 12-month calendar assembled from the monthly sheets.
+• Seasonal campaigns: holiday gifting and a December "Your year in 365 frames" prompt (peak conversion window).
+8.3 Other Revenue Options
+• One-time "Lifetime" purchase (≈ $59–$79) for users averse to subscriptions.
+• Gift cards for postcard packs.
+• No advertising and no data sales. Privacy is a brand pillar and simplifies compliance (GDPR, India's DPDP Act).
+8.4 Unit Economics Snapshot (illustrative)
+• Cloud cost per Plus user: ~1–3 GB at typical object-storage rates plus egress, likely under $0.10/user/month.
+• Store fees: 15% (small-business or year-two subscription rates) to 30%.
+• Target blended ARPU (subscription + print) of $12–$20 per year among paying users.
+• Physical goods are generally exempt from in-app purchase commissions, so route print orders through your own checkout, but verify current App Store and Google Play guidelines before launch.
+9. Step-by-Step Implementation Roadmap
+Team assumption: 2 Flutter engineers, 1 designer, 1 PM/QA, and part-time backend help. Timelines are indicative.
+Phase 0 – Discovery & Foundations (Weeks 1–2)
+• Finalize brand, design tokens and a clickable Figma prototype (Daily View, Calendar, Contact Sheet, Postcard flow).
+• Run 8–10 user interviews and a landing-page waitlist test.
+• Set up the repo, CI/CD (GitHub Actions + Fastlane or Codemagic), dev/stage/prod flavors, Sentry and linting.
+• Spike: validate EXIF extraction on ~20 real photos/devices (iPhone HEIC, Pixel, Samsung, DSLR JPEG) including Android location permissions.
+• Spike: place a sample print order with a partner to validate PDF specs end to end.
+Phase 1 – MVP: The Daily Ritual (Weeks 3–8)
+Scope
+• Onboarding, photo permissions, light/dark theme.
+• Add photo (gallery picker, camera capture); one-per-day enforcement, replace flow, backfill.
+• Local Drift DB, file storage and derivative generation.
+• EXIF extraction pipeline, metadata drawer and reverse geocoding.
+• Daily View with title/description editing; swipe between days.
+• Calendar month grid with thumbnails.
+• Daily reminder notification; ZIP export of the journal.
+Exit criteria: 50 beta users (TestFlight / Play internal) with ≥ 40% reaching 14 entries in 30 days; crash-free sessions > 99.5%.
+Phase 2 – Contact Sheets & Collages (Weeks 9–13)
+• Justified-row layout engine (isolate) and CustomPainter renderer.
+• Monthly contact sheet with in-progress preview and month-end generation (workmanager / BGTaskScheduler + local notification).
+• Deep-link navigation from tiles to days, with state restoration.
+• Yearly collage (strip + mosaic modes) with progressive zoom.
+• High-res, location-stripped export/share.
+• Cache with content-hash invalidation; profiling on low-end Android.
+Exit criteria: monthly sheet < 1.5 s on a mid-range device; 100% tap-through accuracy in QA; no jank in profile mode.
+Phase 3 – Postcards & Public Launch (Weeks 14–19)
+• Multi-select (12–15) with counter and validation.
+• Crop/focal-point editor (non-destructive), layout styles, back-side template.
+• PDF generator with bleed, safe zone, 300 DPI, effective-DPI badges and preflight checks.
+• Preview with trim/bleed overlays; share/save PDF.
+• Paywall plumbing (RevenueCat) and Plus-tier gating.
+• Launch on App Store and Google Play; ASO, press, Product Hunt.
+Exit criteria: 20 test PDFs accepted by two print vendors without manual correction; subscription purchase flow verified in sandbox and production.
+Phase 4 – V1.5: Sync & Print Ordering (Weeks 20–28)
+• Supabase auth (Sign in with Apple / Google / email), encrypted storage, resumable uploads.
+• Multi-device sync with the conflict handling described in §3.1 and §5.4.
+• In-app "Order postcards" checkout through the print API (address validation, tracking, webhooks, order history).
+• Server-side CMYK / PDF-X conversion for professional export.
+• Funnel analytics dashboards; A/B tests on paywall and pricing.
+Phase 5 – V2: Depth & Delight (Months 7–12)
+• Home-screen and lock-screen widgets ("today's frame", "on this day").
+• On-this-day resurfacing; full-text search and a map view of entries.
+• Annual hardcover Yearbook and poster products.
+• Additional postcard formats (5×7, panoramic) and premium contact-sheet themes.
+• Optional private sharing (read-only link to a month or year).
+• Apple Watch / Wear OS quick capture; Shortcuts/Siri integration.
+• Accessibility audit and localization (Hindi, Spanish, German, French, Japanese).
+• Optional opt-in AI features: upscaling for low-res prints, caption suggestions.
+Risk Register
+Risk
+Likelihood
+Impact
+Mitigation
+EXIF/GPS stripped by OS pickers
+High
+High
+Use photo_manager + ACCESS_MEDIA_LOCATION; graceful fallbacks; test on real devices early
+Background month-end jobs not run by the OS
+Medium
+Medium
+Lazy generation on foreground launch + notification when ready
+Print color expectations vs. screen
+Medium
+Medium
+Preview disclaimers; sample pack; partner-tuned RGB workflow
+Habit churn after 2–3 weeks
+High
+High
+Gentle reminders, no streak shaming, contact sheet as month-end payoff, "on this day"
+Memory pressure on large yearly collages
+Medium
+Medium
+Level-of-detail loading, thumbnail-only decode, tile caching
+Store policy changes for physical goods / subscriptions
+Low
+Medium
+Web checkout for print; follow current guidelines; legal review
+Definition of Done (per feature)
+Acceptance criteria written in Gherkin; unit tests on domain logic (≥ 80% coverage on use-cases); golden tests for collage layout; integration tests for the add / replace / backfill flows; an accessibility pass; and a performance check on a low-end Android device (about 3 GB RAM) and an older iPhone.
+Appendix A – Open Questions for Stakeholders
+1. Should backfilling be unlimited or capped (e.g., 7 days) to preserve the "daily" spirit? Recommendation: unlimited, but visually marked as "added later."
+2. Is the 12-photo postcard minimum strict for digital export, or only for printed packs?
+3. Which regions are the priority for print fulfillment at launch (India, US, EU)?
+4. Is end-to-end encrypted sync a launch requirement or a V2 goal?
+Appendix B – Recommended Libraries (Quick Reference)
+flutter_riverpod, go_router, drift + sqlite3_flutter_libs, photo_manager, image_picker, native_exif, exif, image, flutter_image_compress, geocoding, pdf, printing, share_plus, workmanager, flutter_local_notifications, purchases_flutter, supabase_flutter, sentry_flutter, path_provider, crypto, uuid, intl.
